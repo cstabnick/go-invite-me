@@ -280,13 +280,14 @@ func callGoogleGemini(invitingUser string, invitedUsers []string, gameName strin
 
 	prompt := fmt.Sprintf("Generate a friendly invitation message from %s inviting %s to play a game of %s. Make it engaging and informal.", invitingUser, strings.Join(invitedUsers, ", "), gameName)
 	// Example endpoint – adjust this to the actual Gemini AI endpoint if available.
-	url := "https://gemini.googleapis.com/v1alpha/gemini:complete"
+	url := "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+	url += "?key=" + googleGeminiAPIKey
 	
 	// Build the request. In this example, we assume the Gemini API expects a "prompt", a "model", and a token limit.
 	requestBody := map[string]interface{}{
-		"model":             "gemini-1",
-		"prompt":            prompt,
-		"max_output_tokens": 60,
+		"contents": []map[string]interface{}{
+			"parts": []string{prompt},
+		},
 	}
 	jsonBody, err := json.Marshal(requestBody)
 	if err != nil {
