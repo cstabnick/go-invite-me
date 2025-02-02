@@ -6,11 +6,17 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/slack-go/slack"
+	"github.com/joho/godotenv"
 )
 
 func main() {
 	// Get Slack token from environment variable
-	slackToken := os.Getenv("SLACK_TOKEN")
+	err := godotenv.Load(".env")
+	if err != nil {
+		log.Fatal("Error loading .env file:", err)
+	}
+
+	slackToken := os.Getenv("SLACK_BOT_TOKEN")
 	if slackToken == "" {
 		log.Fatal("SLACK_TOKEN environment variable is required")
 	}
