@@ -27,12 +27,17 @@ func main() {
 	// Initialize Gin router
 	r := gin.Default()
 
-	// Initialize handler for sending invitations via the invite API
-	inviteHandler := NewGameInviteHandler(slackClient)
+	// Initialize handler for sending invitations via the invite API (disabled)
+	// inviteHandler := NewGameInviteHandler(slackClient)
 
-	// Setup routes for game invitations
-	r.POST("/invite", inviteHandler.SendInvite)
-	r.GET("/invite", inviteHandler.GetUsageGuide)
+	// Disable original invitation routes
+	// r.POST("/invite", inviteHandler.SendInvite)
+	// r.GET("/invite", inviteHandler.GetUsageGuide)
+
+	// New endpoint: /hello that returns "Hello World"
+	r.GET("/hello", func(c *gin.Context) {
+		c.String(200, "Hello World")
+	})
 
 	// Initialize Slack Bot Handler for interactive DM flows
 	slackBotHandler := NewSlackBotHandler(slackClient)
