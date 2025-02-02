@@ -319,6 +319,7 @@ func callGoogleGemini(invitingUser string, invitedUsers []string, gameName strin
 		return "", fmt.Errorf("Google Gemini API error: %s", string(bodyBytes))
 	}
 	// more logging
+	bodyBytes, _ := io.ReadAll(resp.Body)
 	log.Printf("Google Gemini API response: %s", string(bodyBytes))
 
 	// Assume the response JSON has a structure similar to:
