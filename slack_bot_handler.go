@@ -318,26 +318,36 @@ func callGoogleGemini(invitingUser string, invitedUsers []string, gameName strin
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		return "", fmt.Errorf("Google Gemini API error: %s", string(bodyBytes))
 	}
-	// more logging
-	bodyBytes, _ := io.ReadAll(resp.Body)
-	log.Printf("Google Gemini API response: %s", string(bodyBytes))
 
-	// Assume the response JSON has a structure similar to:
+	// Updated response parsing:
+	// Expected response JSON structure:
 	// {
-	//   "result": {
-	//      "text": "Your generated invitation message"
-	//   }
+	//   "candidates": [
+	//     {
+	//       "content": {
+	//         "parts": [
+	//           {
+	//             "text": "Generated invitation message"
+	//           }
+	//         ]
+	//       }
+	//     }
+	//   ]
 	// }
 	var responseData struct {
-		Result struct {
-			Text string `json:"text"`
-		} `json:"result"`
+		Candidates []struct {
+			Content struct {
+				Parts []struct {
+					Text string `json:"text"`
+				} `json:"parts"`
+			} `json:"content"`
+		} `json:"candidates"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&responseData); err != nil {
 		return "", err
 	}
-	if responseData.Result.Text == "" {
+	if len(responseData.Candidates) == 0 || len(responseData.Candidates[0].Content.Parts) == 0 {
 		return "", fmt.Errorf("No response from Google Gemini")
 	}
-	return responseData.Result.Text, nil
+	return responseData.Candidates[0].Content.Parts[0].Text, nil
 } 
