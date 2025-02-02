@@ -286,7 +286,9 @@ func callGoogleGemini(invitingUser string, invitedUsers []string, gameName strin
 	// Build the request. In this example, we assume the Gemini API expects a "prompt", a "model", and a token limit.
 	requestBody := map[string]interface{}{
 		"contents": []map[string]interface{}{
-			"parts": []string{prompt},
+			"parts": []map[string]interface{}{
+				"text": prompt,
+			},
 		},
 	}
 	jsonBody, err := json.Marshal(requestBody)
