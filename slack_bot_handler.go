@@ -1,8 +1,13 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 
@@ -19,8 +24,9 @@ type SlackBotHandler struct {
 
 // ConversationState holds the current conversation step and data for a given user.
 type ConversationState struct {
-	Step             string   // possible values: "awaiting_names", "awaiting_question"
-	RecipientUserIDs []string // recipients matched from the fuzzy search
+	Step                string   // possible values: "awaiting_names", "awaiting_game"
+	RecipientUserIDs    []string // recipients matched from the fuzzy search
+	RecipientUserNames  []string // matched recipients' display names
 }
 
 // SlackEventCallback is a minimal struct for Slack event callbacks.
@@ -49,7 +55,7 @@ func NewSlackBotHandler(slackClient *slack.Client) *SlackBotHandler {
 }
 
 // HandleEvent is our Gin handler for Slack events.
-// It responds to URL verification and processes both app_mention events and direct messages.
+// It responds to URL verification and processes both app_mention and direct message events.
 func (h *SlackBotHandler) HandleEvent(c *gin.Context) {
 	var eventCallback SlackEventCallback
 	if err := c.BindJSON(&eventCallback); err != nil {
@@ -72,10 +78,10 @@ func (h *SlackBotHandler) HandleEvent(c *gin.Context) {
 	isDirectMessage := strings.HasPrefix(channelID, "D")
 	isAppMention := eventCallback.Event.Type == "app_mention"
 
-	// Process event if it's an app mention or a direct message (ignoring bot messages)
+	// Process event if it's an app mention or a direct message (ignoring messages from bots)
 	if (isAppMention || isDirectMessage) && eventCallback.Event.BotID == "" {
 		userID := eventCallback.Event.User
-		
+
 		// Use different text processing based on event type.
 		var text string
 		if isAppMention {
@@ -102,7 +108,7 @@ func (h *SlackBotHandler) HandleEvent(c *gin.Context) {
 			return
 		}
 
-		// Process conversation state depending on the current step.
+		// Process conversation state based on the current step.
 		if state.Step == "awaiting_names" {
 			log.Printf("User %s is in state 'awaiting_names'. Input text: %s", userID, text)
 			// Parse the comma separated input.
@@ -154,8 +160,7 @@ func (h *SlackBotHandler) HandleEvent(c *gin.Context) {
 				}
 			}
 
-			// If any names did not match, respond with details of errors and the list of all possible valid user names,
-			// and remain in the same state.
+			// If any names did not match, respond with details and list of all possible valid names.
 			if len(unmatched) > 0 {
 				reply := "Could not match the following names: " + strings.Join(unmatched, ", ") + ".\n"
 				reply += "Valid user names include: " + strings.Join(allValidNames, ", ") + ".\n"
@@ -167,41 +172,63 @@ func (h *SlackBotHandler) HandleEvent(c *gin.Context) {
 				return
 			}
 
-			// Otherwise, update state and advance to the question prompt.
+			// Update state with matched recipients and advance to requesting the game name.
 			state.RecipientUserIDs = matchedUserIDs
-			state.Step = "awaiting_question"
+			state.RecipientUserNames = matchedNames
+			state.Step = "awaiting_game"
 			h.conversationMutex.Unlock()
 
 			reply := "Matched recipients: " + strings.Join(matchedNames, ", ") + ".\n"
-			reply += "What do you want to ask?"
-			log.Printf("Advancing conversation state to 'awaiting_question' for user %s", userID)
+			reply += "What game do you want to invite them to?"
+			log.Printf("Advancing conversation state to 'awaiting_game' for user %s", userID)
 			h.sendMessage(channelID, reply)
 			c.Status(http.StatusOK)
 			return
-		} else if state.Step == "awaiting_question" {
-			log.Printf("User %s is in state 'awaiting_question'. Received question: %s", userID, text)
-			question := text
+		} else if state.Step == "awaiting_game" {
+			log.Printf("User %s is in state 'awaiting_game'. Received game name: %s", userID, text)
+			gameName := text
 			h.conversationMutex.Unlock()
 
-			// Forward the question to all matched recipients.
-			log.Printf("Forwarding question from user %s to recipients: %v", userID, state.RecipientUserIDs)
+			// Fetch inviting user's info.
+			invitingUserInfo, err := h.slackClient.GetUserInfo(userID)
+			if err != nil {
+				log.Printf("Error fetching user info for %s: %v", userID, err)
+				h.sendMessage(channelID, "Error fetching your user info: "+err.Error())
+				h.deleteConversation(userID)
+				c.Status(http.StatusInternalServerError)
+				return
+			}
+			invitingUserName := invitingUserInfo.RealName
+
+			// Call OpenAI API to generate the invitation message.
+			invitation, err := callOpenAIGPT(invitingUserName, state.RecipientUserNames, gameName)
+			if err != nil {
+				log.Printf("Error from OpenAI API: %v", err)
+				h.sendMessage(channelID, "Error generating invitation: "+err.Error())
+				h.deleteConversation(userID)
+				c.Status(http.StatusInternalServerError)
+				return
+			}
+
+			// Forward the invitation to all matched recipients.
+			log.Printf("Forwarding invitation from user %s to recipients: %v", userID, state.RecipientUserIDs)
 			var sendErrors []string
 			for _, rid := range state.RecipientUserIDs {
 				_, _, err := h.slackClient.PostMessage(
 					rid,
-					slack.MsgOptionText(question, false),
+					slack.MsgOptionText(invitation, false),
 				)
 				if err != nil {
-					log.Printf("Error sending message to recipient %s: %v", rid, err)
+					log.Printf("Error sending invitation to recipient %s: %v", rid, err)
 					sendErrors = append(sendErrors, err.Error())
 				} else {
-					log.Printf("Successfully sent question to recipient %s", rid)
+					log.Printf("Successfully sent invitation to recipient %s", rid)
 				}
 			}
 			if len(sendErrors) > 0 {
-				h.sendMessage(channelID, "Failed to send question to some recipients: "+strings.Join(sendErrors, "; "))
+				h.sendMessage(channelID, "Failed to send invitation to some recipients: "+strings.Join(sendErrors, "; "))
 			} else {
-				h.sendMessage(channelID, "Your question was sent successfully!")
+				h.sendMessage(channelID, "Your invitation was sent successfully!")
 			}
 			h.deleteConversation(userID)
 			c.Status(http.StatusOK)
@@ -241,4 +268,61 @@ func removeBotMention(text string) string {
 		}
 	}
 	return text
+}
+
+// callOpenAIGPT generates an invitation message using the OpenAI API.
+// It builds a prompt that includes the inviting user's name, the invited users, and the game name.
+func callOpenAIGPT(invitingUser string, invitedUsers []string, gameName string) (string, error) {
+	openaiAPIKey := os.Getenv("OPENAI_API_KEY")
+	if openaiAPIKey == "" {
+		return "", fmt.Errorf("OPENAI_API_KEY not set")
+	}
+
+	prompt := fmt.Sprintf("Generate a friendly invitation message from %s inviting %s to play a game of %s. Make it engaging and informal.", invitingUser, strings.Join(invitedUsers, ", "), gameName)
+	url := "https://api.openai.com/v1/chat/completions"
+	requestBody := map[string]interface{}{
+		"model": "gpt-3.5-turbo",
+		"messages": []map[string]string{
+			{"role": "user", "content": prompt},
+		},
+		"max_tokens": 60,
+	}
+	jsonBody, err := json.Marshal(requestBody)
+	if err != nil {
+		return "", err
+	}
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+openaiAPIKey)
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("OpenAI API error: %s", string(bodyBytes))
+	}
+
+	var responseData struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&responseData); err != nil {
+		return "", err
+	}
+	if len(responseData.Choices) == 0 {
+		return "", fmt.Errorf("No response from OpenAI")
+	}
+	return responseData.Choices[0].Message.Content, nil
 } 
