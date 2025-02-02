@@ -10,7 +10,7 @@ import (
 	"github.com/slack-go/slack"
 )
 
-// SlackBotHandler processes app_mention events and manages a simple conversation state.
+// SlackBotHandler processes app_mention and direct message events and manages a simple conversation state.
 type SlackBotHandler struct {
 	slackClient        *slack.Client
 	conversationMutex  sync.Mutex
@@ -31,7 +31,7 @@ type SlackEventCallback struct {
 	Event     SlackEvent `json:"event"`
 }
 
-// SlackEvent holds the relevant parts of the event (only app_mention events are handled).
+// SlackEvent holds the relevant parts of the event (we handle both app_mention and direct message events).
 type SlackEvent struct {
 	Type    string `json:"type"`
 	User    string `json:"user"`
@@ -49,7 +49,7 @@ func NewSlackBotHandler(slackClient *slack.Client) *SlackBotHandler {
 }
 
 // HandleEvent is our Gin handler for Slack events.
-// It responds to URL verification and processes app_mention events.
+// It responds to URL verification and processes both app_mention events and direct messages.
 func (h *SlackBotHandler) HandleEvent(c *gin.Context) {
 	var eventCallback SlackEventCallback
 	if err := c.BindJSON(&eventCallback); err != nil {
@@ -57,6 +57,7 @@ func (h *SlackBotHandler) HandleEvent(c *gin.Context) {
 		return
 	}
 
+	// Log incoming event details.
 	log.Printf("Received Slack event: Type=%s, User=%s, Channel=%s, Text=%s",
 		eventCallback.Event.Type, eventCallback.Event.User, eventCallback.Event.Channel, eventCallback.Event.Text)
 
@@ -67,14 +68,22 @@ func (h *SlackBotHandler) HandleEvent(c *gin.Context) {
 		return
 	}
 
-	// Process app_mention events (ignoring messages from bots)
-	if eventCallback.Event.Type == "app_mention" && eventCallback.Event.BotID == "" {
-		userID := eventCallback.Event.User
-		channelID := eventCallback.Event.Channel
+	channelID := eventCallback.Event.Channel
+	isDirectMessage := strings.HasPrefix(channelID, "D")
+	isAppMention := eventCallback.Event.Type == "app_mention"
 
-		// Remove the first mention (typically @AppName) from the text.
-		text := removeBotMention(eventCallback.Event.Text)
-		log.Printf("Processed text (after scrub) from user %s: %s", userID, text)
+	// Process event if it's an app mention or a direct message (ignoring bot messages)
+	if (isAppMention || isDirectMessage) && eventCallback.Event.BotID == "" {
+		userID := eventCallback.Event.User
+		
+		// Use different text processing based on event type.
+		var text string
+		if isAppMention {
+			text = removeBotMention(eventCallback.Event.Text)
+		} else {
+			text = eventCallback.Event.Text
+		}
+		log.Printf("Processed text from user %s: %s", userID, text)
 
 		h.conversationMutex.Lock()
 		state, exists := h.conversationStates[userID]
@@ -145,8 +154,8 @@ func (h *SlackBotHandler) HandleEvent(c *gin.Context) {
 				}
 			}
 
-			// If any names did not match, respond with details of errors and
-			// the list of all possible valid user names, and remain in the same state.
+			// If any names did not match, respond with details of errors and the list of all possible valid user names,
+			// and remain in the same state.
 			if len(unmatched) > 0 {
 				reply := "Could not match the following names: " + strings.Join(unmatched, ", ") + ".\n"
 				reply += "Valid user names include: " + strings.Join(allValidNames, ", ") + ".\n"
@@ -200,6 +209,7 @@ func (h *SlackBotHandler) HandleEvent(c *gin.Context) {
 		}
 		h.conversationMutex.Unlock()
 	}
+
 	c.Status(http.StatusOK)
 }
 
