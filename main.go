@@ -5,8 +5,8 @@ import (
 	"os"
 
 	"github.com/gin-gonic/gin"
-	"github.com/slack-go/slack"
 	"github.com/joho/godotenv"
+	"github.com/slack-go/slack"
 )
 
 func main() {
@@ -43,4 +43,4 @@ func main() {
 	if err := r.Run(":8080"); err != nil {
 		log.Fatal("Failed to start server:", err)
 	}
-} 
+}

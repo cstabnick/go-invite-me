@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/slack-go/slack"
@@ -25,9 +27,9 @@ type SlackBotHandler struct {
 
 // ConversationState holds the current conversation step and data for a given user.
 type ConversationState struct {
-	Step                string   // possible values: "awaiting_names", "awaiting_game"
-	RecipientUserIDs    []string // recipients matched from the fuzzy search
-	RecipientUserNames  []string // matched recipients' display names
+	Step               string   // possible values: "awaiting_names", "awaiting_game"
+	RecipientUserIDs   []string // recipients matched from the fuzzy search
+	RecipientUserNames []string // matched recipients' display names
 }
 
 // SlackEventCallback is a minimal struct for Slack event callbacks.
@@ -385,18 +387,29 @@ func removeBotMention(text string) string {
 
 // callGoogleGemini generates an invitation message using Google Gemini AI.
 // It builds a prompt that includes the inviting user's name, the invited users, and the game name.
+// There's now a 50-50 chance for the invitation tone to be either upbeat or scathing insulting.
 func callGoogleGemini(invitingUser string, invitedUsers []string, gameName string) (string, error) {
 	googleGeminiAPIKey := os.Getenv("GOOGLE_GEMINI_API_KEY")
 	if googleGeminiAPIKey == "" {
 		return "", fmt.Errorf("GOOGLE_GEMINI_API_KEY not set")
 	}
 
-	prompt := fmt.Sprintf("Generate a friendly invitation message from %s inviting %s to play a game of %s. Make it engaging and informal.", invitingUser, strings.Join(invitedUsers, ", "), gameName)
+	// Randomly choose between an upbeat or scathing tone for the invitation.
+	rand.Seed(time.Now().UnixNano())
+	var prompt string
+	if rand.Intn(2) == 0 {
+		// Upbeat invitation message prompt.
+		prompt = fmt.Sprintf("Generate a friendly invitation message from %s inviting %s to play a game of %s. Make it engaging and informal.", invitingUser, strings.Join(invitedUsers, ", "), gameName)
+	} else {
+		// Scathing and insulting invitation message prompt.
+		prompt = fmt.Sprintf("Generate a scathing and insulting invitation message from %s calling out %s for their terrible skills and inviting them to play a hopeless game of %s. Use sarcastic and biting language.", invitingUser, strings.Join(invitedUsers, ", "), gameName)
+	}
+
 	// Example endpoint – adjust this to the actual Gemini AI endpoint if available.
 	url := "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
 	url += "?key=" + googleGeminiAPIKey
-	
-	// Build the request. In this example, we assume the Gemini API expects a "prompt", a "model", and a token limit.
+
+	// Build the request. In this example, we assume the Gemini API expects a "prompt".
 	requestBody := map[string]interface{}{
 		"contents": []map[string]interface{}{
 			{
@@ -432,7 +445,6 @@ func callGoogleGemini(invitingUser string, invitedUsers []string, gameName strin
 		return "", fmt.Errorf("Google Gemini API error: %s", string(bodyBytes))
 	}
 
-	// Updated response parsing:
 	// Expected response JSON structure:
 	// {
 	//   "candidates": [
@@ -463,4 +475,4 @@ func callGoogleGemini(invitingUser string, invitedUsers []string, gameName strin
 		return "", fmt.Errorf("No response from Google Gemini")
 	}
 	return responseData.Candidates[0].Content.Parts[0].Text, nil
-} 
+}
