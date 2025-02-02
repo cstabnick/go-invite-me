@@ -70,9 +70,11 @@ func (h *SlackBotHandler) HandleEvent(c *gin.Context) {
 	// Process app_mention events (ignoring messages from bots)
 	if eventCallback.Event.Type == "app_mention" && eventCallback.Event.BotID == "" {
 		userID := eventCallback.Event.User
-		text := eventCallback.Event.Text
 		channelID := eventCallback.Event.Channel
-		log.Printf("Processing app_mention from user %s in channel %s: %s", userID, channelID, text)
+
+		// Remove the first mention (typically @AppName) from the text.
+		text := removeBotMention(eventCallback.Event.Text)
+		log.Printf("Processed text (after scrub) from user %s: %s", userID, text)
 
 		h.conversationMutex.Lock()
 		state, exists := h.conversationStates[userID]
@@ -143,8 +145,8 @@ func (h *SlackBotHandler) HandleEvent(c *gin.Context) {
 				}
 			}
 
-			// If any names did not match, respond with details of errors and the list of possible users,
-			// and do not advance to the next state.
+			// If any names did not match, respond with details of errors and
+			// the list of all possible valid user names, and remain in the same state.
 			if len(unmatched) > 0 {
 				reply := "Could not match the following names: " + strings.Join(unmatched, ", ") + ".\n"
 				reply += "Valid user names include: " + strings.Join(allValidNames, ", ") + ".\n"
@@ -172,7 +174,7 @@ func (h *SlackBotHandler) HandleEvent(c *gin.Context) {
 			question := text
 			h.conversationMutex.Unlock()
 
-			// Forward the forwarded question to all matched recipients.
+			// Forward the question to all matched recipients.
 			log.Printf("Forwarding question from user %s to recipients: %v", userID, state.RecipientUserIDs)
 			var sendErrors []string
 			for _, rid := range state.RecipientUserIDs {
@@ -219,4 +221,14 @@ func (h *SlackBotHandler) deleteConversation(userID string) {
 	h.conversationMutex.Lock()
 	delete(h.conversationStates, userID)
 	h.conversationMutex.Unlock()
+}
+
+// removeBotMention removes the first mention (typically @AppName) from the given text.
+func removeBotMention(text string) string {
+	if strings.HasPrefix(text, "<@") {
+		if end := strings.Index(text, ">"); end != -1 {
+			return strings.TrimSpace(text[end+1:])
+		}
+	}
+	return text
 } 
