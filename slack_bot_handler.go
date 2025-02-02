@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -90,6 +91,118 @@ func (h *SlackBotHandler) HandleEvent(c *gin.Context) {
 			text = eventCallback.Event.Text
 		}
 		log.Printf("Processed text from user %s: %s", userID, text)
+
+		// ----- Command Branch: Directly process /invite command -----
+		if strings.HasPrefix(text, "/invite") {
+			// Expecting a command of the format: /invite "user1,user2" "game"
+			re := regexp.MustCompile(`^/invite\s+"([^"]+)"\s+"([^"]+)"\s*$`)
+			matches := re.FindStringSubmatch(text)
+			if matches == nil || len(matches) != 3 {
+				h.sendMessage(channelID, "Invalid command format. Use: /invite \"user1,user2\" \"game\"")
+				c.Status(http.StatusOK)
+				return
+			}
+			userNamesInput := matches[1]
+			gameName := matches[2]
+			log.Printf("Parsed /invite command: users: %s, game: %s", userNamesInput, gameName)
+
+			// Parse the comma-separated user names.
+			names := strings.Split(userNamesInput, ",")
+			for i, name := range names {
+				names[i] = strings.TrimSpace(name)
+			}
+
+			// Fetch all Slack users (filtering out bots and deleted accounts).
+			users, err := h.slackClient.GetUsers()
+			if err != nil {
+				log.Printf("Error fetching users for matching: %v", err)
+				h.sendMessage(channelID, "Error fetching users for matching: "+err.Error())
+				c.Status(http.StatusInternalServerError)
+				return
+			}
+			var validUsers []slack.User
+			var allValidNames []string
+			for _, u := range users {
+				if !u.IsBot && !u.Deleted {
+					validUsers = append(validUsers, u)
+					allValidNames = append(allValidNames, u.RealName)
+				}
+			}
+
+			// Fuzzy match each provided name.
+			var matchedUserIDs []string
+			var matchedNames []string
+			var unmatched []string
+			for _, inputName := range names {
+				found := false
+				for _, user := range validUsers {
+					if strings.Contains(strings.ToLower(user.Name), strings.ToLower(inputName)) ||
+						strings.Contains(strings.ToLower(user.RealName), strings.ToLower(inputName)) {
+						log.Printf("Matched input '%s' to user '%s' (ID: %s)", inputName, user.RealName, user.ID)
+						matchedUserIDs = append(matchedUserIDs, user.ID)
+						matchedNames = append(matchedNames, user.RealName)
+						found = true
+						break
+					}
+				}
+				if !found {
+					log.Printf("No match for input '%s'", inputName)
+					unmatched = append(unmatched, inputName)
+				}
+			}
+
+			// If any names did not match, respond with a list of valid names.
+			if len(unmatched) > 0 {
+				reply := "Could not match the following names: " + strings.Join(unmatched, ", ") + ".\n"
+				reply += "Valid user names include: " + strings.Join(allValidNames, ", ") + ".\n"
+				h.sendMessage(channelID, reply)
+				c.Status(http.StatusOK)
+				return
+			}
+
+			// Retrieve the inviting user's info.
+			invitingUserInfo, err := h.slackClient.GetUserInfo(userID)
+			if err != nil {
+				log.Printf("Error fetching user info for %s: %v", userID, err)
+				h.sendMessage(channelID, "Error fetching your user info: "+err.Error())
+				c.Status(http.StatusInternalServerError)
+				return
+			}
+			invitingUserName := invitingUserInfo.RealName
+
+			// Call Google Gemini API to generate the invitation message.
+			invitation, err := callGoogleGemini(invitingUserName, matchedNames, gameName)
+			if err != nil {
+				log.Printf("Error from Google Gemini API: %v", err)
+				h.sendMessage(channelID, "Error generating invitation: "+err.Error())
+				c.Status(http.StatusInternalServerError)
+				return
+			}
+
+			// Forward the invitation to all matched recipients.
+			log.Printf("Forwarding invitation from user %s to recipients: %v", userID, matchedUserIDs)
+			var sendErrors []string
+			for _, rid := range matchedUserIDs {
+				_, _, err := h.slackClient.PostMessage(
+					rid,
+					slack.MsgOptionText(invitation, false),
+				)
+				if err != nil {
+					log.Printf("Error sending invitation to recipient %s: %v", rid, err)
+					sendErrors = append(sendErrors, err.Error())
+				} else {
+					log.Printf("Successfully sent invitation to recipient %s", rid)
+				}
+			}
+			if len(sendErrors) > 0 {
+				h.sendMessage(channelID, "Failed to send invitation to some recipients: "+strings.Join(sendErrors, "; "))
+			} else {
+				h.sendMessage(channelID, "Your invitation was sent successfully!")
+			}
+			c.Status(http.StatusOK)
+			return
+		}
+		// -------------------------------------------------------------------
 
 		h.conversationMutex.Lock()
 		state, exists := h.conversationStates[userID]
