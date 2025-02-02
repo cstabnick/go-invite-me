@@ -10,7 +10,7 @@ import (
 	"github.com/slack-go/slack"
 )
 
-// SlackBotHandler processes app mention events and manages a simple conversation state.
+// SlackBotHandler processes app_mention events and manages a simple conversation state.
 type SlackBotHandler struct {
 	slackClient        *slack.Client
 	conversationMutex  sync.Mutex
@@ -60,7 +60,7 @@ func (h *SlackBotHandler) HandleEvent(c *gin.Context) {
 	log.Printf("Received Slack event: Type=%s, User=%s, Channel=%s, Text=%s",
 		eventCallback.Event.Type, eventCallback.Event.User, eventCallback.Event.Channel, eventCallback.Event.Text)
 
-	// Handle URL verification challenge
+	// Handle URL verification challenge.
 	if eventCallback.Type == "url_verification" {
 		log.Println("Handling URL verification challenge")
 		c.JSON(http.StatusOK, gin.H{"challenge": eventCallback.Challenge})
@@ -94,7 +94,7 @@ func (h *SlackBotHandler) HandleEvent(c *gin.Context) {
 		// Process conversation state depending on the current step.
 		if state.Step == "awaiting_names" {
 			log.Printf("User %s is in state 'awaiting_names'. Input text: %s", userID, text)
-			// Parse the comma separated input
+			// Parse the comma separated input.
 			names := strings.Split(text, ",")
 			var trimmedNames []string
 			for _, name := range names {
@@ -102,7 +102,7 @@ func (h *SlackBotHandler) HandleEvent(c *gin.Context) {
 			}
 			log.Printf("Parsed names for user %s: %v", userID, trimmedNames)
 
-			// Get all Slack users (filtering out bots and deleted users)
+			// Fetch all Slack users (filtering out bots and deleted accounts).
 			users, err := h.slackClient.GetUsers()
 			if err != nil {
 				log.Printf("Error fetching users for matching: %v", err)
@@ -112,9 +112,11 @@ func (h *SlackBotHandler) HandleEvent(c *gin.Context) {
 				return
 			}
 			var validUsers []slack.User
+			var allValidNames []string
 			for _, u := range users {
 				if !u.IsBot && !u.Deleted {
 					validUsers = append(validUsers, u)
+					allValidNames = append(allValidNames, u.RealName)
 				}
 			}
 
@@ -141,18 +143,25 @@ func (h *SlackBotHandler) HandleEvent(c *gin.Context) {
 				}
 			}
 
-			// Save the recipients and advance the conversation state.
+			// If any names did not match, respond with details of errors and the list of possible users,
+			// and do not advance to the next state.
+			if len(unmatched) > 0 {
+				reply := "Could not match the following names: " + strings.Join(unmatched, ", ") + ".\n"
+				reply += "Valid user names include: " + strings.Join(allValidNames, ", ") + ".\n"
+				reply += "Please provide a correct comma separated list of names."
+				h.conversationMutex.Unlock()
+				log.Printf("Unmatched names for user %s: %v", userID, unmatched)
+				h.sendMessage(channelID, reply)
+				c.Status(http.StatusOK)
+				return
+			}
+
+			// Otherwise, update state and advance to the question prompt.
 			state.RecipientUserIDs = matchedUserIDs
 			state.Step = "awaiting_question"
 			h.conversationMutex.Unlock()
 
-			reply := ""
-			if len(matchedNames) > 0 {
-				reply += "Matched recipients: " + strings.Join(matchedNames, ", ") + ".\n"
-			}
-			if len(unmatched) > 0 {
-				reply += "Could not match: " + strings.Join(unmatched, ", ") + ".\n"
-			}
+			reply := "Matched recipients: " + strings.Join(matchedNames, ", ") + ".\n"
 			reply += "What do you want to ask?"
 			log.Printf("Advancing conversation state to 'awaiting_question' for user %s", userID)
 			h.sendMessage(channelID, reply)
@@ -163,9 +172,8 @@ func (h *SlackBotHandler) HandleEvent(c *gin.Context) {
 			question := text
 			h.conversationMutex.Unlock()
 
-			// Log that the question is being forwarded to recipients.
+			// Forward the forwarded question to all matched recipients.
 			log.Printf("Forwarding question from user %s to recipients: %v", userID, state.RecipientUserIDs)
-
 			var sendErrors []string
 			for _, rid := range state.RecipientUserIDs {
 				_, _, err := h.slackClient.PostMessage(
