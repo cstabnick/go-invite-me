@@ -66,6 +66,8 @@ func (h *SlackBotHandler) HandleEvent(c *gin.Context) {
 		return
 	}
 
+	log.Println("Event type: %s", eventCallback.Event.Type)
+
 	// Process message events (ignoring messages from bots)
 	if eventCallback.Event.Type == "message" && eventCallback.Event.BotID == "" {
 		userID := eventCallback.Event.User
