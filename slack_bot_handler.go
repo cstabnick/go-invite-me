@@ -200,10 +200,10 @@ func (h *SlackBotHandler) HandleEvent(c *gin.Context) {
 			}
 			invitingUserName := invitingUserInfo.RealName
 
-			// Call OpenAI API to generate the invitation message.
-			invitation, err := callOpenAIGPT(invitingUserName, state.RecipientUserNames, gameName)
+			// Call Google Gemini API to generate the invitation message.
+			invitation, err := callGoogleGemini(invitingUserName, state.RecipientUserNames, gameName)
 			if err != nil {
-				log.Printf("Error from OpenAI API: %v", err)
+				log.Printf("Error from Google Gemini API: %v", err)
 				h.sendMessage(channelID, "Error generating invitation: "+err.Error())
 				h.deleteConversation(userID)
 				c.Status(http.StatusInternalServerError)
@@ -270,22 +270,23 @@ func removeBotMention(text string) string {
 	return text
 }
 
-// callOpenAIGPT generates an invitation message using the OpenAI API.
+// callGoogleGemini generates an invitation message using Google Gemini AI.
 // It builds a prompt that includes the inviting user's name, the invited users, and the game name.
-func callOpenAIGPT(invitingUser string, invitedUsers []string, gameName string) (string, error) {
-	openaiAPIKey := os.Getenv("OPENAI_API_KEY")
-	if openaiAPIKey == "" {
-		return "", fmt.Errorf("OPENAI_API_KEY not set")
+func callGoogleGemini(invitingUser string, invitedUsers []string, gameName string) (string, error) {
+	googleGeminiAPIKey := os.Getenv("GOOGLE_GEMINI_API_KEY")
+	if googleGeminiAPIKey == "" {
+		return "", fmt.Errorf("GOOGLE_GEMINI_API_KEY not set")
 	}
 
 	prompt := fmt.Sprintf("Generate a friendly invitation message from %s inviting %s to play a game of %s. Make it engaging and informal.", invitingUser, strings.Join(invitedUsers, ", "), gameName)
-	url := "https://api.openai.com/v1/chat/completions"
+	// Example endpoint – adjust this to the actual Gemini AI endpoint if available.
+	url := "https://gemini.googleapis.com/v1alpha/gemini:complete"
+	
+	// Build the request. In this example, we assume the Gemini API expects a "prompt", a "model", and a token limit.
 	requestBody := map[string]interface{}{
-		"model": "gpt-3.5-turbo",
-		"messages": []map[string]string{
-			{"role": "user", "content": prompt},
-		},
-		"max_tokens": 60,
+		"model":             "gemini-1",
+		"prompt":            prompt,
+		"max_output_tokens": 60,
 	}
 	jsonBody, err := json.Marshal(requestBody)
 	if err != nil {
@@ -297,7 +298,7 @@ func callOpenAIGPT(invitingUser string, invitedUsers []string, gameName string) 
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+openaiAPIKey)
+	req.Header.Set("Authorization", "Bearer "+googleGeminiAPIKey)
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
@@ -308,21 +309,25 @@ func callOpenAIGPT(invitingUser string, invitedUsers []string, gameName string) 
 
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("OpenAI API error: %s", string(bodyBytes))
+		return "", fmt.Errorf("Google Gemini API error: %s", string(bodyBytes))
 	}
 
+	// Assume the response JSON has a structure similar to:
+	// {
+	//   "result": {
+	//      "text": "Your generated invitation message"
+	//   }
+	// }
 	var responseData struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
+		Result struct {
+			Text string `json:"text"`
+		} `json:"result"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&responseData); err != nil {
 		return "", err
 	}
-	if len(responseData.Choices) == 0 {
-		return "", fmt.Errorf("No response from OpenAI")
+	if responseData.Result.Text == "" {
+		return "", fmt.Errorf("No response from Google Gemini")
 	}
-	return responseData.Choices[0].Message.Content, nil
+	return responseData.Result.Text, nil
 } 
