@@ -20,7 +20,7 @@ type InviteRequest struct {
 }
 
 type UsageGuide struct {
-	Description string          `json:"description"`
+	Description string         `json:"description"`
 	Endpoints   []EndpointInfo `json:"endpoints"`
 	UserIDs     []UserInfo     `json:"users"`
 }
@@ -161,4 +161,4 @@ func (h *GameInviteHandler) GetUsageGuide(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, guide)
-} 
+}
