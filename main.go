@@ -18,7 +18,7 @@ func main() {
 
 	slackToken := os.Getenv("SLACK_BOT_TOKEN")
 	if slackToken == "" {
-		log.Fatal("SLACK_TOKEN environment variable is required")
+		log.Fatal("SLACK_BOT_TOKEN environment variable is required")
 	}
 
 	// Initialize Slack client
@@ -27,12 +27,17 @@ func main() {
 	// Initialize Gin router
 	r := gin.Default()
 
-	// Initialize handler
-	handler := NewGameInviteHandler(slackClient)
+	// Initialize handler for sending invitations via the invite API
+	inviteHandler := NewGameInviteHandler(slackClient)
 
-	// Setup routes
-	r.POST("/invite", handler.SendInvite)
-	r.GET("/invite", handler.GetUsageGuide)
+	// Setup routes for game invitations
+	r.POST("/invite", inviteHandler.SendInvite)
+	r.GET("/invite", inviteHandler.GetUsageGuide)
+
+	// Initialize Slack Bot Handler for interactive DM flows
+	slackBotHandler := NewSlackBotHandler(slackClient)
+	// Setup route for receiving Slack Event callbacks
+	r.POST("/slack/events", slackBotHandler.HandleEvent)
 
 	// Start server
 	if err := r.Run(":8080"); err != nil {
