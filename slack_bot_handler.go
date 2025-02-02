@@ -10,7 +10,7 @@ import (
 	"github.com/slack-go/slack"
 )
 
-// SlackBotHandler processes DM events and manages a simple conversation state.
+// SlackBotHandler processes app mention events and manages a simple conversation state.
 type SlackBotHandler struct {
 	slackClient        *slack.Client
 	conversationMutex  sync.Mutex
@@ -31,7 +31,7 @@ type SlackEventCallback struct {
 	Event     SlackEvent `json:"event"`
 }
 
-// SlackEvent holds the relevant parts of the event (only message events are handled).
+// SlackEvent holds the relevant parts of the event (only app_mention events are handled).
 type SlackEvent struct {
 	Type    string `json:"type"`
 	User    string `json:"user"`
@@ -48,7 +48,8 @@ func NewSlackBotHandler(slackClient *slack.Client) *SlackBotHandler {
 	}
 }
 
-// HandleEvent is our Gin handler for Slack Events. It responds to URL verification and processes message events.
+// HandleEvent is our Gin handler for Slack events.
+// It responds to URL verification and processes app_mention events.
 func (h *SlackBotHandler) HandleEvent(c *gin.Context) {
 	var eventCallback SlackEventCallback
 	if err := c.BindJSON(&eventCallback); err != nil {
@@ -66,14 +67,12 @@ func (h *SlackBotHandler) HandleEvent(c *gin.Context) {
 		return
 	}
 
-	log.Println("Event type: %s", eventCallback.Event.Type)
-
-	// Process message events (ignoring messages from bots)
-	if eventCallback.Event.Type == "message" && eventCallback.Event.BotID == "" {
+	// Process app_mention events (ignoring messages from bots)
+	if eventCallback.Event.Type == "app_mention" && eventCallback.Event.BotID == "" {
 		userID := eventCallback.Event.User
 		text := eventCallback.Event.Text
 		channelID := eventCallback.Event.Channel
-		log.Printf("Processing message from user %s in channel %s: %s", userID, channelID, text)
+		log.Printf("Processing app_mention from user %s in channel %s: %s", userID, channelID, text)
 
 		h.conversationMutex.Lock()
 		state, exists := h.conversationStates[userID]
